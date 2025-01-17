@@ -231,6 +231,16 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 	}
 
 	for name, pkg := range pkgs {
+		finalID := id
+		packagePath := id
+
+		isTestPackage := strings.HasSuffix(name, "_test")
+
+		if isTestPackage {
+			finalID = fmt.Sprintf("%s_test [%s.test]", finalID, finalID)
+			packagePath += "_test"
+		}
+
 		flatImports := make(map[string]string)
 
 		for _, f := range pkg.Files {
@@ -243,6 +253,7 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 
 				switch {
 				case errors.Is(err, ErrPackageNotFound):
+					log.Printf("%s not found\n", path)
 					continue
 				case err != nil:
 					return err
@@ -254,10 +265,10 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 			}
 		}
 
-		p.cache[id] = &Package{
-			ID:              id,
+		p.cache[finalID] = &Package{
+			ID:              finalID,
 			Name:            name,
-			PkgPath:         id,
+			PkgPath:         packagePath,
 			Dir:             dir,
 			Errors:          nil,
 			GoFiles:         maps.Keys(pkg.Files),
