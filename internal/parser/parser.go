@@ -146,6 +146,10 @@ func (p *Parser) resolveDirectory(dir string) (string, error) {
 
 // returns package dir
 func (p *Parser) resolvePackage(id string) (string, error) {
+	if pkg, ok := p.cache[id]; ok {
+		return pkg.Dir, nil
+	}
+
 	for _, root := range p.path {
 		packagePath := path.Join(root, id)
 		if info, err := os.Stat(packagePath); err == nil && info.IsDir() {
@@ -338,16 +342,6 @@ func upDir(dir string) (string, error) {
 	}
 
 	return path.Join(append([]string{string(os.PathSeparator)}, parts[:len(parts)-1]...)...), nil
-}
-
-func Map[I any, O any](xs []I, f func(I) O) []O {
-	ret := make([]O, 0, len(xs))
-
-	for _, x := range xs {
-		ret = append(ret, f(x))
-	}
-
-	return ret
 }
 
 func Must[T any](val T, err error) T {

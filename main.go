@@ -1,21 +1,57 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"path"
+	"runtime/pprof"
 	"slices"
 	"strings"
+	"time"
+
+	_ "net/http/pprof"
 
 	"github.com/goccy/go-json"
 	"github.com/ijimiji/yolist/internal/parser"
 	"golang.org/x/tools/go/packages"
 )
 
+var profile = true
+
 func main() {
+	if profile {
+		cpu, err := os.Create("cpu.prof")
+		if err != nil {
+			panic(err)
+		}
+
+		defer cpu.Close()
+
+		if err := pprof.StartCPUProfile(cpu); err != nil {
+			panic(err)
+		}
+
+		// mem, err := os.Create("mem.prof")
+		// if err != nil {
+		// 	panic(err)
+		// }
+		//
+		// defer mem.Close()
+		//
+		// runtime.GC()
+		//
+		// if err := pprof.WriteHeapProfile(mem); err != nil {
+		// 	panic(err)
+		// }
+	}
+
 	var (
 		err error
 		req packages.DriverRequest
 		dr  DriverResponse
 	)
+
+	os.WriteFile(path.Join("/Users/larynjahor/gits/yolist", fmt.Sprint(time.Now().Unix())), []byte(fmt.Sprint(os.Args)), os.ModePerm)
 
 	if !slices.ContainsFunc(os.Args[1:], func(p string) bool { return strings.Contains(p, "/arcadia/...") }) {
 		dr.NotHandled = true
@@ -66,6 +102,8 @@ func exit(dr *DriverResponse) {
 	if err := json.NewEncoder(os.Stdout).Encode(dr); err != nil {
 		panic(err)
 	}
+
+	pprof.StopCPUProfile()
 
 	os.Exit(0)
 }
