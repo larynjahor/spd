@@ -67,11 +67,6 @@ type Package struct {
 	// Imports maps import paths appearing in the package's Go source files
 	// to corresponding loaded Packages.
 	Imports map[string]string `json:"Imports"`
-
-	// Module is the module information for the package if it exists.
-	//
-	// Note: it may be missing for std and cmd; see Go issue #65816.
-	Module *Module `json:"Module,omitempty"`
 }
 
 // An Error describes a problem with a package's metadata, syntax, or types.
@@ -102,15 +97,8 @@ func (err Error) Error() string {
 }
 
 type Module struct {
-	Vendored  bool
-	Path      string       // module path
-	Version   string       // module version
-	Main      bool         // is this the main module?
-	Indirect  bool         // is this module only an indirect dependency of main module?
-	Dir       string       // directory holding files for this module, if any
-	GoMod     string       // path to go.mod file used when loading this module, if any
-	GoVersion string       // go version used in module
-	Error     *ModuleError // error loading module
+	Dir  string
+	Path string // a.yandex-team.ru, github.com/zloeboba/mux
 }
 
 // ModuleError holds errors loading a module.
