@@ -1,13 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"path"
 	"runtime/pprof"
 	"slices"
 	"strings"
-	"time"
 
 	_ "net/http/pprof"
 
@@ -16,7 +13,7 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-var profile = true
+var profile = false
 
 func main() {
 	if profile {
@@ -30,19 +27,6 @@ func main() {
 		if err := pprof.StartCPUProfile(cpu); err != nil {
 			panic(err)
 		}
-
-		// mem, err := os.Create("mem.prof")
-		// if err != nil {
-		// 	panic(err)
-		// }
-		//
-		// defer mem.Close()
-		//
-		// runtime.GC()
-		//
-		// if err := pprof.WriteHeapProfile(mem); err != nil {
-		// 	panic(err)
-		// }
 	}
 
 	var (
@@ -51,12 +35,11 @@ func main() {
 		dr  DriverResponse
 	)
 
-	os.WriteFile(path.Join("/Users/larynjahor/gits/yolist", fmt.Sprint(time.Now().Unix())), []byte(fmt.Sprint(os.Args)), os.ModePerm)
-
 	if !slices.ContainsFunc(os.Args[1:], func(p string) bool { return strings.Contains(p, "/arcadia/...") }) {
 		dr.NotHandled = true
 
-		exit(&dr)
+		writeResponse(&dr)
+		return
 	}
 
 	targets := []string{
@@ -67,6 +50,7 @@ func main() {
 		"/Users/larynjahor/arcadia/neuroexpert/backend",
 		"/Users/larynjahor/arcadia/thefeed/backend",
 		"/Users/larynjahor/arcadia/browser/backend/extra/summary-bot",
+		"/Users/larynjahor/arcadia/library/go",
 	}
 
 	p, err := parser.New()
@@ -95,17 +79,15 @@ func main() {
 
 	dr.Roots = append(dr.Roots, "builtin")
 
-	exit(&dr)
+	writeResponse(&dr)
+
+	pprof.StopCPUProfile()
 }
 
-func exit(dr *DriverResponse) {
+func writeResponse(dr *DriverResponse) {
 	if err := json.NewEncoder(os.Stdout).Encode(dr); err != nil {
 		panic(err)
 	}
-
-	pprof.StopCPUProfile()
-
-	os.Exit(0)
 }
 
 type DriverResponse struct {

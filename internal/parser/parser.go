@@ -16,9 +16,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/exp/maps"
 	"golang.org/x/mod/modfile"
+)
+
+const (
+	numWorkers = 16
 )
 
 func unused() {
@@ -51,6 +56,7 @@ func New() (*Parser, error) {
 
 type Parser struct {
 	Env          Env
+	mtx          sync.Mutex
 	path         []string
 	tags         []string
 	cache        map[string]*Package // id
@@ -84,11 +90,30 @@ func (p *Parser) ParseTargets(targets []string) ([]*Package, error) {
 		p.path = append(p.path, p.Env.GOPATH)
 	}
 
-	for _, t := range targets {
-		if err := p.parse(t); err != nil {
-			return nil, err
-		}
+	targetsCh := make(chan string)
+	var wg sync.WaitGroup
+
+	for range numWorkers {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for t := range targetsCh {
+				if err := p.parse(t); err != nil {
+					panic(err)
+				}
+			}
+		}()
 	}
+
+	for _, t := range targets {
+		targetsCh <- t
+	}
+
+	close(targetsCh)
+
+	wg.Wait()
 
 	if err := p.parseDirectory("builtin", path.Join(p.Env.GOROOT, "src", "builtin")); err != nil {
 		return nil, err
@@ -146,9 +171,14 @@ func (p *Parser) resolveDirectory(dir string) (string, error) {
 
 // returns package dir
 func (p *Parser) resolvePackage(id string) (string, error) {
+	p.mtx.Lock()
+
 	if pkg, ok := p.cache[id]; ok {
+		p.mtx.Unlock()
 		return pkg.Dir, nil
 	}
+
+	p.mtx.Unlock()
 
 	for _, root := range p.path {
 		packagePath := path.Join(root, id)
@@ -172,11 +202,16 @@ type astPackage struct {
 }
 
 func (p *Parser) parseDirectory(id string, dir string) error {
+	p.mtx.Lock()
+
 	if _, ok := p.knownDirs[dir]; ok {
+		p.mtx.Unlock()
 		return nil
 	}
 
 	p.knownDirs[dir] = struct{}{}
+
+	p.mtx.Unlock()
 
 	es, err := os.ReadDir(dir)
 	if err != nil {
@@ -269,6 +304,8 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 			}
 		}
 
+		p.mtx.Lock()
+
 		p.cache[finalID] = &Package{
 			ID:              finalID,
 			Name:            name,
@@ -285,6 +322,8 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 			Target:          "",
 			Imports:         flatImports,
 		}
+
+		p.mtx.Unlock()
 	}
 
 	return nil
