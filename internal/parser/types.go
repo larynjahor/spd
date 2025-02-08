@@ -67,6 +67,8 @@ type Package struct {
 	// Imports maps import paths appearing in the package's Go source files
 	// to corresponding loaded Packages.
 	Imports map[string]string `json:"Imports"`
+
+	DepOnly bool `json:"DepOnly"`
 }
 
 // An Error describes a problem with a package's metadata, syntax, or types.

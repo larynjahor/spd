@@ -3,12 +3,12 @@ package main
 import (
 	"os"
 	"runtime/pprof"
-	"slices"
 	"strings"
 
 	_ "net/http/pprof"
 
 	"github.com/goccy/go-json"
+	"github.com/ijimiji/yolist/internal/config"
 	"github.com/ijimiji/yolist/internal/parser"
 	"golang.org/x/tools/go/packages"
 )
@@ -35,25 +35,31 @@ func main() {
 		dr  DriverResponse
 	)
 
-	if !slices.ContainsFunc(os.Args[1:], func(p string) bool { return strings.Contains(p, "/arcadia/...") }) {
+	cfg := config.Load()
+
+	var contains bool
+	for pattern := range cfg.Patterns {
+		for _, arg := range os.Args[1:] {
+			if strings.Contains(arg, pattern) {
+				contains = true
+			}
+		}
+	}
+
+	if !contains {
 		dr.NotHandled = true
 
 		writeResponse(&dr)
 		return
 	}
 
-	targets := []string{
-		"/Users/larynjahor/arcadia/yy/backend",
-		"/Users/larynjahor/arcadia/yy/yaart-api/backend",
-		"/Users/larynjahor/arcadia/neuro/go",
-		"/Users/larynjahor/arcadia/neuro/suggest",
-		"/Users/larynjahor/arcadia/neuroexpert/backend",
-		"/Users/larynjahor/arcadia/thefeed/backend",
-		"/Users/larynjahor/arcadia/browser/backend/extra/summary-bot",
-		"/Users/larynjahor/arcadia/library/go",
+	var targets []string
+
+	for _, files := range cfg.Patterns {
+		targets = append(targets, files...)
 	}
 
-	p, err := parser.New()
+	p, err := parser.New(targets)
 	if err != nil {
 		panic(err)
 	}
@@ -62,17 +68,19 @@ func main() {
 		panic(err)
 	}
 
-	dr.GoVersion = p.Env.MinorVersion()
-	dr.Arch = p.Env.GOARCH
+	env := p.Env()
+
+	dr.GoVersion = env.MinorVersion()
+	dr.Arch = env.GOARCH
 	dr.Compiler = "gc"
 
-	dr.Packages, err = p.ParseTargets(targets)
+	dr.Packages, err = p.Packages()
 	if err != nil {
 		panic(err)
 	}
 
 	for _, p := range dr.Packages {
-		if strings.Contains(p.ID, "yandex-team") {
+		if !p.DepOnly && strings.HasSuffix(p.ID, "main") {
 			dr.Roots = append(dr.Roots, p.ID)
 		}
 	}

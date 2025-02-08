@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	numWorkers = 16
+	numWorkers = 4
 )
 
 func unused() {
@@ -38,7 +38,7 @@ var (
 	ErrIgnore          = errors.New("ignore")
 )
 
-func New() (*Parser, error) {
+func New(targets []string) (*Parser, error) {
 	env, err := parseGoEnv()
 	if err != nil {
 		return nil, err
@@ -47,7 +47,8 @@ func New() (*Parser, error) {
 	env.GOVENDOR = true // TODO
 
 	return &Parser{
-		Env:          env,
+		targets:      targets,
+		env:          env,
 		cache:        make(map[string]*Package, 1024),
 		knownModules: make(map[string]Module, 16),
 		knownDirs:    make(map[string]struct{}, 1024),
@@ -55,8 +56,9 @@ func New() (*Parser, error) {
 }
 
 type Parser struct {
-	Env          Env
 	mtx          sync.Mutex
+	env          Env
+	targets      []string
 	path         []string
 	tags         []string
 	cache        map[string]*Package // id
@@ -64,15 +66,19 @@ type Parser struct {
 	knownDirs    map[string]struct{} // name
 }
 
-func (p *Parser) ParseTargets(targets []string) ([]*Package, error) {
-	for _, t := range targets {
+func (p *Parser) Env() Env {
+	return p.env
+}
+
+func (p *Parser) Packages() ([]*Package, error) {
+	for _, t := range p.targets {
 		moduleDir, err := p.findModuleDir(t)
 		if err != nil {
 			return nil, err
 		}
 
 		p.path = append(p.path, moduleDir)
-		if p.Env.GOVENDOR {
+		if p.env.GOVENDOR {
 			p.path = append(p.path, path.Join(moduleDir, "vendor"))
 		}
 
@@ -84,10 +90,10 @@ func (p *Parser) ParseTargets(targets []string) ([]*Package, error) {
 		p.knownModules[moduleDir] = *m
 	}
 
-	p.path = append(p.path, path.Join(p.Env.GOROOT, "src"))
+	p.path = append(p.path, path.Join(p.env.GOROOT, "src"))
 
-	if !p.Env.GOVENDOR {
-		p.path = append(p.path, p.Env.GOPATH)
+	if !p.env.GOVENDOR {
+		p.path = append(p.path, p.env.GOPATH)
 	}
 
 	targetsCh := make(chan string)
@@ -107,7 +113,7 @@ func (p *Parser) ParseTargets(targets []string) ([]*Package, error) {
 		}()
 	}
 
-	for _, t := range targets {
+	for _, t := range p.targets {
 		targetsCh <- t
 	}
 
@@ -115,7 +121,7 @@ func (p *Parser) ParseTargets(targets []string) ([]*Package, error) {
 
 	wg.Wait()
 
-	if err := p.parseDirectory("builtin", path.Join(p.Env.GOROOT, "src", "builtin")); err != nil {
+	if err := p.parseDirectory("builtin", path.Join(p.env.GOROOT, "src", "builtin")); err != nil {
 		return nil, err
 	}
 
@@ -254,6 +260,10 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 			}
 		}
 
+		if strings.HasPrefix(fileName, "_test.go") {
+			continue // TODO
+		}
+
 		if ignored {
 			continue
 		}
@@ -276,6 +286,8 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 		isTestPackage := strings.HasSuffix(name, "_test")
 
 		if isTestPackage {
+			continue // TODO
+
 			finalID = fmt.Sprintf("%s_test [%s.test]", finalID, finalID)
 			packagePath += "_test"
 		}
@@ -307,6 +319,7 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 		p.mtx.Lock()
 
 		p.cache[finalID] = &Package{
+			DepOnly:         !p.isRootPackage(dir),
 			ID:              finalID,
 			Name:            name,
 			PkgPath:         packagePath,
@@ -347,6 +360,16 @@ func (p *Parser) findModuleDir(dir string) (string, error) {
 	}
 
 	return p.findModuleDir(up)
+}
+
+func (p *Parser) isRootPackage(pkgDir string) bool {
+	for _, t := range p.targets {
+		if strings.Contains(pkgDir, t) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (p *Parser) parseModule(goModPath string) (*Module, error) {
@@ -398,6 +421,7 @@ type Env struct {
 	GOROOT    string
 	GOARCH    string
 	GOVERSION string
+	GOOS      string
 }
 
 func (e *Env) MinorVersion() int {
