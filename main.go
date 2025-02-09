@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"runtime/pprof"
 
 	_ "net/http/pprof"
 
@@ -47,8 +46,6 @@ func main() {
 	dr.Roots = append(dr.Roots, "builtin")
 
 	writeResponse(&dr)
-
-	pprof.StopCPUProfile()
 }
 
 func writeResponse(dr *DriverResponse) {
