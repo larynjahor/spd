@@ -8,8 +8,6 @@ Be aware to run VSCode from the root directory.
 ```json
 {
   "gopls": {
-    "build.subdirWatchPatterns": "off",
-    "build.importsSource": "off", // may be unnecessary in some cases
     "build.directoryFilters": [
         "-",
         "+prj1",
@@ -37,8 +35,6 @@ local targets = {
 local gopls_config = {
     settings = {
         gopls = {
-            subdirWatchPatterns = "off",
-            importsSource = "off", -- may be unnecessary in some cases
             env = {
                 "GOPACKAGESDRIVER" = "path to spd",
                 "SPDTARGETS" = table.concat(targets, ","),
