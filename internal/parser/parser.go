@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	numWorkers = 4
+	numWorkers = 1
+
 )
 
 func unused() {
@@ -172,7 +173,7 @@ func (p *Parser) resolveDirectory(dir string) (string, error) {
 		return suffix, nil
 	}
 
-	return "", fmt.Errorf("%v %s", ErrDirNotResolved, dir)
+	return "", ErrDirNotResolved
 }
 
 // returns package dir

@@ -2,8 +2,9 @@ package main
 
 import (
 	"os"
+	"path"
 	"runtime/pprof"
-	"strings"
+	"time"
 
 	_ "net/http/pprof"
 
@@ -13,22 +14,7 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-var profile = false
-
 func main() {
-	if profile {
-		cpu, err := os.Create("cpu.prof")
-		if err != nil {
-			panic(err)
-		}
-
-		defer cpu.Close()
-
-		if err := pprof.StartCPUProfile(cpu); err != nil {
-			panic(err)
-		}
-	}
-
 	var (
 		err error
 		req packages.DriverRequest
@@ -36,22 +22,6 @@ func main() {
 	)
 
 	cfg := config.Load()
-
-	var contains bool
-	for pattern := range cfg.Patterns {
-		for _, arg := range os.Args[1:] {
-			if strings.Contains(arg, pattern) {
-				contains = true
-			}
-		}
-	}
-
-	if !contains {
-		dr.NotHandled = true
-
-		writeResponse(&dr)
-		return
-	}
 
 	var targets []string
 
@@ -68,6 +38,18 @@ func main() {
 		panic(err)
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		panic(err)
+	}
+
+	dump, _ := json.Marshal(map[string]any{
+		"args": os.Args,
+		"req":  req,
+		"cwd":  cwd,
+	})
+	os.WriteFile(path.Join("/Users/larynjahor/gits/yolist/log", time.Now().String()), dump, os.ModePerm)
+
 	env := p.Env()
 
 	dr.GoVersion = env.MinorVersion()
@@ -80,7 +62,7 @@ func main() {
 	}
 
 	for _, p := range dr.Packages {
-		if !p.DepOnly && strings.HasSuffix(p.ID, "main") {
+		if !p.DepOnly {
 			dr.Roots = append(dr.Roots, p.ID)
 		}
 	}
