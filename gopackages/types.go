@@ -1,4 +1,4 @@
-package parser
+package gopackages
 
 type Package struct {
 	// ID is a unique identifier for a package,

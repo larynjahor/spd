@@ -1,7 +1,6 @@
-package parser
+package gopackages
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -10,27 +9,16 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"path"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
 
 	"golang.org/x/exp/maps"
 	"golang.org/x/mod/modfile"
 )
 
-const (
-	numWorkers = 1
-
-)
-
-func unused() {
-	log.Println()
-}
-
+// TODO fix tag impl
 var tagRE = regexp.MustCompile(".*go:build ([a-zA-Z0-9]+)")
 
 var (
@@ -39,25 +27,17 @@ var (
 	ErrIgnore          = errors.New("ignore")
 )
 
-func New(targets []string) (*Parser, error) {
-	env, err := parseGoEnv()
-	if err != nil {
-		return nil, err
-	}
-
-	env.GOVENDOR = true // TODO
-
+func NewWalker(env Env, targets []string) *Parser {
 	return &Parser{
 		targets:      targets,
 		env:          env,
 		cache:        make(map[string]*Package, 1024),
 		knownModules: make(map[string]Module, 16),
 		knownDirs:    make(map[string]struct{}, 1024),
-	}, nil
+	}
 }
 
 type Parser struct {
-	mtx          sync.Mutex
 	env          Env
 	targets      []string
 	path         []string
@@ -79,7 +59,7 @@ func (p *Parser) Packages() ([]*Package, error) {
 		}
 
 		p.path = append(p.path, moduleDir)
-		if p.env.GOVENDOR {
+		if p.env.Vendor {
 			p.path = append(p.path, path.Join(moduleDir, "vendor"))
 		}
 
@@ -93,34 +73,15 @@ func (p *Parser) Packages() ([]*Package, error) {
 
 	p.path = append(p.path, path.Join(p.env.GOROOT, "src"))
 
-	if !p.env.GOVENDOR {
+	if !p.env.Vendor {
 		p.path = append(p.path, p.env.GOPATH)
 	}
 
-	targetsCh := make(chan string)
-	var wg sync.WaitGroup
-
-	for range numWorkers {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			for t := range targetsCh {
-				if err := p.parse(t); err != nil {
-					panic(err)
-				}
-			}
-		}()
-	}
-
 	for _, t := range p.targets {
-		targetsCh <- t
+		if err := p.parse(t); err != nil {
+			panic(err)
+		}
 	}
-
-	close(targetsCh)
-
-	wg.Wait()
 
 	if err := p.parseDirectory("builtin", path.Join(p.env.GOROOT, "src", "builtin")); err != nil {
 		return nil, err
@@ -178,14 +139,9 @@ func (p *Parser) resolveDirectory(dir string) (string, error) {
 
 // returns package dir
 func (p *Parser) resolvePackage(id string) (string, error) {
-	p.mtx.Lock()
-
 	if pkg, ok := p.cache[id]; ok {
-		p.mtx.Unlock()
 		return pkg.Dir, nil
 	}
-
-	p.mtx.Unlock()
 
 	for _, root := range p.path {
 		packagePath := path.Join(root, id)
@@ -209,16 +165,11 @@ type astPackage struct {
 }
 
 func (p *Parser) parseDirectory(id string, dir string) error {
-	p.mtx.Lock()
-
 	if _, ok := p.knownDirs[dir]; ok {
-		p.mtx.Unlock()
 		return nil
 	}
 
 	p.knownDirs[dir] = struct{}{}
-
-	p.mtx.Unlock()
 
 	es, err := os.ReadDir(dir)
 	if err != nil {
@@ -317,8 +268,6 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 			}
 		}
 
-		p.mtx.Lock()
-
 		p.cache[finalID] = &Package{
 			DepOnly:         !p.isRootPackage(dir),
 			ID:              finalID,
@@ -336,8 +285,6 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 			Target:          "",
 			Imports:         flatImports,
 		}
-
-		p.mtx.Unlock()
 	}
 
 	return nil
@@ -413,39 +360,6 @@ func Must[T any](val T, err error) T {
 	}
 
 	return val
-}
-
-type Env struct {
-	GOVENDOR  bool
-	GOMOD     string
-	GOPATH    string
-	GOROOT    string
-	GOARCH    string
-	GOVERSION string
-	GOOS      string
-}
-
-func (e *Env) MinorVersion() int {
-	tokens := strings.Split(e.GOVERSION, ".")
-	switch len(tokens) {
-	case 2, 3:
-		return Must(strconv.Atoi(tokens[1]))
-	default:
-		panic("wrong version format")
-	}
-}
-
-func parseGoEnv() (zero Env, _ error) {
-	marshaled, err := exec.Command("go", "env", "-json").Output()
-	if err != nil {
-		return zero, err
-	}
-
-	if err := json.Unmarshal(marshaled, &zero); err != nil {
-		return zero, err
-	}
-
-	return zero, nil
 }
 
 func isGoFile(name string) bool {

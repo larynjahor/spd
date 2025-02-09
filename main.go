@@ -2,15 +2,12 @@ package main
 
 import (
 	"os"
-	"path"
 	"runtime/pprof"
-	"time"
 
 	_ "net/http/pprof"
 
 	"github.com/goccy/go-json"
-	"github.com/ijimiji/yolist/internal/config"
-	"github.com/ijimiji/yolist/internal/parser"
+	"github.com/larynjahor/spd/gopackages"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -21,42 +18,22 @@ func main() {
 		dr  DriverResponse
 	)
 
-	cfg := config.Load()
-
-	var targets []string
-
-	for _, files := range cfg.Patterns {
-		targets = append(targets, files...)
-	}
-
-	p, err := parser.New(targets)
-	if err != nil {
-		panic(err)
-	}
-
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		panic(err)
 	}
 
-	cwd, err := os.Getwd()
+	env, err := gopackages.ParseEnv(req.Env)
 	if err != nil {
 		panic(err)
 	}
 
-	dump, _ := json.Marshal(map[string]any{
-		"args": os.Args,
-		"req":  req,
-		"cwd":  cwd,
-	})
-	os.WriteFile(path.Join("/Users/larynjahor/gits/yolist/log", time.Now().String()), dump, os.ModePerm)
-
-	env := p.Env()
+	w := gopackages.NewWalker(env, env.Targets)
 
 	dr.GoVersion = env.MinorVersion()
 	dr.Arch = env.GOARCH
 	dr.Compiler = "gc"
 
-	dr.Packages, err = p.Packages()
+	dr.Packages, err = w.Packages()
 	if err != nil {
 		panic(err)
 	}
@@ -88,7 +65,7 @@ type DriverResponse struct {
 
 	Roots []string `json:",omitempty"`
 
-	Packages []*parser.Package
+	Packages []*gopackages.Package
 
 	GoVersion int
 }

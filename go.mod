@@ -1,4 +1,4 @@
-module github.com/ijimiji/yolist
+module github.com/larynjahor/spd
 
 go 1.22.4
 
