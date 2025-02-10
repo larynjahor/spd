@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"slices"
 
 	_ "net/http/pprof"
 
@@ -24,6 +25,11 @@ func main() {
 	env, err := gopackages.ParseEnv(req.Env)
 	if err != nil {
 		panic(err)
+	}
+
+	if !slices.Contains(os.Args, "./...") {
+		dr.NotHandled = true
+		writeResponse(&dr)
 	}
 
 	w := gopackages.NewWalker(env, env.Targets)
@@ -52,6 +58,8 @@ func writeResponse(dr *DriverResponse) {
 	if err := json.NewEncoder(os.Stdout).Encode(dr); err != nil {
 		panic(err)
 	}
+
+	os.Exit(0)
 }
 
 type DriverResponse struct {
