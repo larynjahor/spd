@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"io/fs"
 	"log"
+	"log/slog"
 	"os"
 	"path"
 	"regexp"
@@ -71,7 +72,8 @@ func (p *Parser) Packages() ([]*Package, error) {
 		p.knownModules[moduleDir] = *m
 	}
 
-	p.path = append(p.path, path.Join(p.env.GOROOT, "src"))
+	gorootSrc := path.Join(p.env.GOROOT, "src")
+	p.path = append(p.path, gorootSrc)
 
 	if !p.env.Vendor {
 		p.path = append(p.path, p.env.GOPATH)
@@ -79,7 +81,7 @@ func (p *Parser) Packages() ([]*Package, error) {
 
 	for _, t := range p.targets {
 		if err := p.parse(t); err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
 
@@ -171,6 +173,10 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 
 	p.knownDirs[dir] = struct{}{}
 
+	if strings.HasPrefix(dir, p.env.GOROOT) && (strings.Contains(dir, "testdata") || strings.Contains(dir, "internal")) {
+		return nil
+	}
+
 	es, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -205,8 +211,13 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 					continue
 				}
 
-				tokens := tagRE.FindStringSubmatch(c.Text)
-				if len(tokens) > 1 && !slices.Contains(p.tags, tokens[1]) {
+				if !strings.HasPrefix(c.Text, "//go:build") {
+					continue
+				}
+
+				slog.Info("got directive", slog.String("build", c.Text))
+
+				if !p.allowedByTags(strings.TrimPrefix(c.Text, "//go:build")) {
 					ignored = true
 				}
 			}
@@ -288,6 +299,110 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 	}
 
 	return nil
+}
+
+func (p *Parser) allowedByTags(s string) bool {
+	out := newStack[string]()
+	ops := newStack[string]()
+
+	for _, token := range strings.Fields(s) {
+		temp := []string{}
+
+		tempString := ""
+
+		for i, ch := range token {
+			switch ch {
+			case '!', '(', ')':
+				if tempString != "" {
+					temp = append(temp, tempString)
+					tempString = ""
+				}
+
+				temp = append(temp, string(ch))
+			default:
+				tempString += string(ch)
+				if i == len(token)-1 {
+					temp = append(temp, tempString)
+				}
+			}
+		}
+
+		for _, t := range temp {
+			switch t {
+			case "!":
+				ops.Push(t)
+			case "&&":
+				for !ops.Empty() && !(ops.Top() == "&&" || ops.Top() == "||" || ops.Top() == "(") {
+					out.Push(ops.Pop())
+				}
+
+				ops.Push(t)
+			case "||":
+				for !ops.Empty() && !(ops.Top() == "||" || ops.Top() == "(") {
+					out.Push(ops.Pop())
+				}
+
+				ops.Push(t)
+			case "(":
+				ops.Push("(")
+			case ")":
+				for !ops.Empty() {
+					cur := ops.Pop()
+					if cur == "(" {
+						break
+					}
+
+					out.Push(cur)
+				}
+			default:
+				out.Push(t)
+			}
+		}
+
+	}
+
+	for !ops.Empty() {
+		out.Push(ops.Pop())
+	}
+
+	eval := newStack[bool]()
+
+	for _, t := range out.Values() {
+		switch t {
+		case "!":
+			if eval.Empty() {
+				return false
+			}
+
+			eval.Push(!eval.Pop())
+		case "||", "&&":
+			if eval.Empty() {
+				return false
+			}
+
+			first := eval.Pop()
+
+			if eval.Empty() {
+				return false
+			}
+
+			second := eval.Pop()
+
+			if t == "&&" {
+				eval.Push(first && second)
+			} else {
+				eval.Push(first || second)
+			}
+		default:
+			eval.Push(slices.Contains(p.env.Tags, t))
+		}
+	}
+
+	if eval.Empty() {
+		return false
+	}
+
+	return eval.Pop()
 }
 
 func (p *Parser) findModuleDir(dir string) (string, error) {

@@ -36,6 +36,8 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 		slog.String("goversion", zero.GOVERSION),
 	)
 
+	zero.Tags = append(zero.Tags, zero.GOARCH)
+
 	switch zero.GOOS {
 	case "android":
 		zero.Tags = append(zero.Tags, "linux", "unix")

@@ -55,6 +55,7 @@ func run() error {
 
 	dr.Packages, err = parser.Packages()
 	if err != nil {
+		slog.Error("failed to get packages", slog.Any("err", err), slog.String("goroot", env.GOROOT), slog.String("gomod", env.GOMOD))
 		return err
 	}
 
