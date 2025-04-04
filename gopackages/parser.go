@@ -27,7 +27,7 @@ var (
 	ErrIgnore          = errors.New("ignore")
 )
 
-func NewWalker(env Env, targets []string) *Parser {
+func NewParser(env Env, targets []string) *Parser {
 	return &Parser{
 		targets:      targets,
 		env:          env,

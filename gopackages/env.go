@@ -3,6 +3,7 @@ package gopackages
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path"
@@ -25,6 +26,29 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 		return zero, err
 	}
 
+	slog.Info(
+		"parsed go toolchain environment",
+		slog.String("os", zero.GOOS),
+		slog.String("arch", zero.GOARCH),
+		slog.String("gomod", zero.GOMOD),
+		slog.String("goroot", zero.GOROOT),
+		slog.String("gopath", zero.GOPATH),
+		slog.String("goversion", zero.GOVERSION),
+	)
+
+	switch zero.GOOS {
+	case "android":
+		zero.Tags = append(zero.Tags, "linux", "unix")
+	case "ios":
+		zero.Tags = append(zero.Tags, "darwin", "unix")
+	case "illumos":
+		zero.Tags = append(zero.Tags, "solaris", "unix")
+	case "linux", "darwin", "bsd", "solaris", "dragonfly", "openbsd", "freebsd", "hurd", "netbsd", "plan9":
+		zero.Tags = append(zero.Tags, "unix")
+	default:
+		zero.Tags = append(zero.Tags, zero.GOOS)
+	}
+
 	for _, v := range vars {
 		tokens := strings.SplitN(v, "=", 2)
 		if len(tokens) < 2 {
@@ -34,6 +58,10 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 		k, v := tokens[0], tokens[1]
 
 		switch k {
+		case "CGO_ENABLED":
+			if v == "1" {
+				zero.Tags = append(zero.Tags, "cgo")
+			}
 		case "GOFLAGS":
 			flags := strings.Split(v, " ")
 			for _, flag := range flags {
@@ -52,6 +80,7 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 				zero.Targets = append(zero.Targets, t)
 			}
 		default:
+			slog.Info("got env", slog.String("key", k), slog.String("value", v))
 		}
 	}
 
@@ -61,6 +90,7 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 type Env struct {
 	Targets []string `json:"-"`
 	Vendor  bool     `json:"-"`
+	Tags    []string
 
 	GOMOD     string
 	GOPATH    string
@@ -72,6 +102,7 @@ type Env struct {
 
 func (e *Env) MinorVersion() int {
 	tokens := strings.Split(e.GOVERSION, ".")
+
 	switch len(tokens) {
 	case 2, 3:
 		return Must(strconv.Atoi(tokens[1]))

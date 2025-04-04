@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+	"log/slog"
 	"os"
 	"slices"
 
@@ -8,39 +10,52 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/larynjahor/spd/gopackages"
+	"github.com/larynjahor/spd/xslog"
 	"golang.org/x/tools/go/packages"
 )
 
 func main() {
+	c := xslog.Auto()
+	defer c.Close()
+
+	if err := run(); err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func run() error {
 	var (
-		err error
 		req packages.DriverRequest
 		dr  DriverResponse
 	)
 
+	slog.Info("started spd")
+	defer slog.Info("exited spd")
+
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
-		panic(err)
+		return err
 	}
 
 	env, err := gopackages.ParseEnv(req.Env)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	if !slices.Contains(os.Args, "./...") {
 		dr.NotHandled = true
-		writeResponse(&dr)
+
+		return writeResponse(&dr)
 	}
 
-	w := gopackages.NewWalker(env, env.Targets)
+	parser := gopackages.NewParser(env, env.Targets)
 
 	dr.GoVersion = env.MinorVersion()
 	dr.Arch = env.GOARCH
 	dr.Compiler = "gc"
 
-	dr.Packages, err = w.Packages()
+	dr.Packages, err = parser.Packages()
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	for _, p := range dr.Packages {
@@ -51,15 +66,15 @@ func main() {
 
 	dr.Roots = append(dr.Roots, "builtin")
 
-	writeResponse(&dr)
+	return writeResponse(&dr)
 }
 
-func writeResponse(dr *DriverResponse) {
+func writeResponse(dr *DriverResponse) error {
 	if err := json.NewEncoder(os.Stdout).Encode(dr); err != nil {
-		panic(err)
+		return err
 	}
 
-	os.Exit(0)
+	return nil
 }
 
 type DriverResponse struct {
