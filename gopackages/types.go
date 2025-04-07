@@ -1,5 +1,12 @@
 package gopackages
 
+import (
+	"log/slog"
+	"os"
+	"path"
+	"strings"
+)
+
 type Package struct {
 	// ID is a unique identifier for a package,
 	// in a syntax provided by the underlying build system.
@@ -95,12 +102,49 @@ func (err Error) Error() string {
 	if pos == "" {
 		pos = "-" // like token.Position{}.String()
 	}
+
 	return pos + ": " + err.Msg
 }
 
 type Module struct {
-	Dir  string
-	Path string // a.yandex-team.ru, github.com/zloeboba/mux
+	Dir       string
+	VendorDir string
+	Path      string // a.yandex-team.ru, github.com/zloeboba/mux
+}
+
+func (m *Module) LocateID(id string) (string, bool) {
+	p := path.Join(m.Dir, strings.TrimPrefix(strings.TrimPrefix(id, m.Path), "/"))
+	info, err := os.Stat(p)
+	if err == nil && info.IsDir() {
+		return p, true
+	}
+
+	p = path.Join(m.VendorDir, id)
+	slog.Debug("locating id", "candidate", p, "vendor", m.VendorDir)
+	info, err = os.Stat(p)
+	if err == nil && info.IsDir() {
+		return p, true
+	}
+
+	return "", false
+}
+
+func (m *Module) LocateDir(dir string) (string, bool) {
+	rest := strings.TrimPrefix(dir, m.Dir)
+	if rest != dir {
+		if m.Path == "std" {
+			return strings.TrimPrefix(rest, "/"), true
+		}
+
+		return path.Join(m.Path, rest), true
+	}
+
+	rest = strings.TrimPrefix(dir, m.VendorDir)
+	if rest != dir {
+		return strings.TrimPrefix(rest, "/"), true
+	}
+
+	return "", false
 }
 
 // ModuleError holds errors loading a module.

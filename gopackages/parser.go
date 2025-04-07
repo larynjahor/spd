@@ -49,31 +49,25 @@ func NewParser(env Env) (*Parser, error) {
 		targets = append(targets, abs)
 	}
 
-	packagePath := []string{
-		path.Join(env.GOROOT, "src"),
-		path.Join(root, "vendor"),
-		path.Join(env.GOPATH, "pkg/mod"),
-	}
-
 	modules := map[string]Module{}
 
 	// we might want to expand this logic to gowork
-	mod, err := parseModule(env.GOMOD)
-	if err != nil {
-		return nil, err
+	for _, m := range []string{env.GOMOD, path.Join(env.GOROOT, "src", "go.mod")} {
+		mod, err := parseModule(m)
+		if err != nil {
+			return nil, err
+		}
+
+		modules[mod.Dir] = *mod
 	}
 
-	modules[root] = *mod
-
 	return &Parser{
-		path:      packagePath,
-		root:      root,
-		targets:   targets,
-		env:       env,
-		cache:     make(map[string]*Package, 8192),
-		knownDirs: make(map[string]struct{}, 8192),
-		tags:      env.Tags,
-
+		root:         root,
+		targets:      targets,
+		env:          env,
+		cache:        make(map[string]*Package, 8192),
+		knownDirs:    make(map[string]struct{}, 8192),
+		tags:         env.Tags,
 		knownModules: modules,
 	}, nil
 }
@@ -81,7 +75,6 @@ func NewParser(env Env) (*Parser, error) {
 type Parser struct {
 	env          Env
 	root         string
-	path         []string
 	tags         []string
 	cache        map[string]*Package // id
 	targets      []string            // path
@@ -96,6 +89,14 @@ func (p *Parser) Env() Env {
 func (p *Parser) Packages(patterns []string) ([]*Package, error) {
 	for _, pattern := range patterns {
 		switch {
+		case strings.HasPrefix(pattern, "file="):
+			file := strings.TrimPrefix(pattern, "file=")
+			dir, _ := path.Split(file)
+
+			if err := p.parse(dir); err != nil {
+				slog.Error("parse package", slog.Any("err", err), slog.String("pattern", pattern), slog.String("res_pattern", dir))
+				continue
+			}
 		case strings.HasSuffix(pattern, "/..."):
 			packagePath := p.root
 			patternPath := strings.TrimSuffix(strings.TrimSuffix(pattern, "..."), string(os.PathSeparator))
@@ -132,8 +133,6 @@ func (p *Parser) parse(quasiPackage string) error {
 		return err
 	}
 
-	slog.Info("resolved directory", slog.String("path", quasiPackage), slog.String("id", id))
-
 	if err := p.parseDirectory(id, quasiPackage); err != nil {
 		return err
 	}
@@ -164,19 +163,16 @@ func (p *Parser) parse(quasiPackage string) error {
 
 // returns package id
 func (p *Parser) resolveDirectory(dir string) (string, error) {
-	for _, ppath := range p.path {
-		suffix := strings.TrimPrefix(dir, ppath)
-		if suffix == dir {
-			continue
+	for _, mod := range p.knownModules {
+		id, ok := mod.LocateDir(dir)
+		if ok {
+			return id, nil
 		}
-
-		return suffix, nil
 	}
 
-	for modPath, mod := range p.knownModules {
-		if strings.HasPrefix(dir, modPath) {
-			return path.Join(mod.Path, strings.TrimPrefix(dir, modPath)), nil
-		}
+	rest := strings.TrimPrefix(dir, path.Join(p.env.GOPATH, "pkg", "mod"))
+	if rest != dir {
+		return strings.TrimPrefix(rest, "/"), nil
 	}
 
 	return "", ErrDirNotResolved
@@ -188,18 +184,16 @@ func (p *Parser) resolvePackage(id string) (string, error) {
 		return pkg.Dir, nil
 	}
 
-	for _, root := range p.path {
-		packagePath := path.Join(root, id)
-		if info, err := os.Stat(packagePath); err == nil && info.IsDir() {
-			return packagePath, nil
+	for _, m := range p.knownModules {
+		p, ok := m.LocateID(id)
+		if ok {
+			return p, nil
 		}
 	}
 
-	for mDir, m := range p.knownModules {
-		packagePath := path.Join(mDir, strings.TrimPrefix(id, m.Path))
-		if info, err := os.Stat(packagePath); err == nil && info.IsDir() {
-			return packagePath, nil
-		}
+	path := path.Join(p.env.GOPATH, "pkg", "mod", id)
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return path, nil
 	}
 
 	return "", ErrPackageNotFound
@@ -304,6 +298,10 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 
 				flatImports[path] = path
 
+				if path == "C" {
+					continue
+				}
+
 				packageDir, err := p.resolvePackage(path)
 
 				switch {
@@ -343,12 +341,6 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 }
 
 func (p *Parser) allowedByTargets(dir string) bool {
-	for _, path := range p.path {
-		if strings.HasPrefix(dir, path) {
-			return false
-		}
-	}
-
 	for _, t := range p.targets {
 		if strings.HasPrefix(dir, t) {
 			return true
@@ -468,34 +460,8 @@ func (p *Parser) allowedByTags(s string) bool {
 	return eval.Pop()
 }
 
-func (p *Parser) findModuleDir(dir string) (string, error) {
-	es, err := os.ReadDir(dir)
-	if err != nil {
-		return "", err
-	}
-
-	for _, e := range es {
-		if e.Name() == "go.mod" {
-			return dir, nil
-		}
-	}
-
-	up, err := upDir(dir)
-	if err != nil {
-		return "", err
-	}
-
-	return p.findModuleDir(up)
-}
-
 func (p *Parser) isRootPackage(pkgDir string) bool {
-	for _, t := range p.targets {
-		if strings.Contains(pkgDir, t) {
-			return true
-		}
-	}
-
-	return false
+	return p.allowedByTargets(pkgDir)
 }
 
 func parseModule(goModPath string) (*Module, error) {
@@ -515,8 +481,9 @@ func parseModule(goModPath string) (*Module, error) {
 	dir = strings.TrimSuffix(dir, string(os.PathSeparator))
 
 	m := &Module{
-		Path: mod.Module.Mod.Path,
-		Dir:  dir,
+		Path:      mod.Module.Mod.Path,
+		Dir:       dir,
+		VendorDir: path.Join(dir, "vendor"),
 	}
 
 	return m, nil
