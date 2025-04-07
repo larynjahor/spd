@@ -7,11 +7,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
-	"log"
 	"log/slog"
 	"os"
 	"path"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -19,74 +17,110 @@ import (
 	"golang.org/x/mod/modfile"
 )
 
-// TODO fix tag impl
-var tagRE = regexp.MustCompile(".*go:build ([a-zA-Z0-9]+)")
-
 var (
 	ErrPackageNotFound = errors.New("package not found")
 	ErrDirNotResolved  = errors.New("cannot resolve directory")
 	ErrIgnore          = errors.New("ignore")
 )
 
-func NewParser(env Env, targets []string) *Parser {
-	return &Parser{
-		targets:      targets,
-		env:          env,
-		cache:        make(map[string]*Package, 1024),
-		knownModules: make(map[string]Module, 16),
-		knownDirs:    make(map[string]struct{}, 1024),
+func NewParser(env Env) (*Parser, error) {
+	root, err := upDir(env.GOMOD)
+	if err != nil {
+		return nil, err
 	}
+
+	var targets []string
+
+	for _, relative := range env.Targets {
+		abs := path.Join(root, relative)
+
+		s, err := os.Stat(abs)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			return nil, err
+		}
+
+		if !s.IsDir() {
+			continue
+		}
+
+		targets = append(targets, abs)
+	}
+
+	packagePath := []string{
+		path.Join(env.GOROOT, "src"),
+		path.Join(root, "vendor"),
+		path.Join(env.GOPATH, "pkg/mod"),
+	}
+
+	modules := map[string]Module{}
+
+	// we might want to expand this logic to gowork
+	mod, err := parseModule(env.GOMOD)
+	if err != nil {
+		return nil, err
+	}
+
+	modules[root] = *mod
+
+	return &Parser{
+		path:      packagePath,
+		root:      root,
+		targets:   targets,
+		env:       env,
+		cache:     make(map[string]*Package, 8192),
+		knownDirs: make(map[string]struct{}, 8192),
+		tags:      env.Tags,
+
+		knownModules: modules,
+	}, nil
 }
 
 type Parser struct {
 	env          Env
-	targets      []string
+	root         string
 	path         []string
 	tags         []string
 	cache        map[string]*Package // id
+	targets      []string            // path
 	knownModules map[string]Module
-	knownDirs    map[string]struct{} // name
+	knownDirs    map[string]struct{} // path
 }
 
 func (p *Parser) Env() Env {
 	return p.env
 }
 
-func (p *Parser) Packages() ([]*Package, error) {
-	for _, t := range p.targets {
-		moduleDir, err := p.findModuleDir(t)
-		if err != nil {
-			return nil, err
+func (p *Parser) Packages(patterns []string) ([]*Package, error) {
+	for _, pattern := range patterns {
+		switch {
+		case strings.HasSuffix(pattern, "/..."):
+			packagePath := p.root
+			patternPath := strings.TrimSuffix(strings.TrimSuffix(pattern, "..."), string(os.PathSeparator))
+
+			if patternPath != "" {
+				packagePath = path.Join(packagePath, patternPath)
+			}
+
+			if err := p.parse(packagePath); err != nil {
+				slog.Error("parse package", slog.Any("err", err), slog.String("pattern", pattern), slog.String("res_pattern", packagePath))
+				continue
+			}
+
+		default:
+			dir, err := p.resolvePackage(pattern)
+			if err != nil {
+				slog.Warn("cannot locate package", slog.String("pattern", pattern), slog.Any("err", err))
+				continue
+			}
+
+			if err := p.parseDirectory(pattern, dir); err != nil {
+				slog.Error("cannot parse package", slog.String("pattern", pattern), slog.String("directory", dir), slog.Any("err", err))
+				continue
+			}
 		}
-
-		p.path = append(p.path, moduleDir)
-		if p.env.Vendor {
-			p.path = append(p.path, path.Join(moduleDir, "vendor"))
-		}
-
-		m, err := p.parseModule(path.Join(moduleDir, "go.mod"))
-		if err != nil {
-			return nil, err
-		}
-
-		p.knownModules[moduleDir] = *m
-	}
-
-	gorootSrc := path.Join(p.env.GOROOT, "src")
-	p.path = append(p.path, gorootSrc)
-
-	if !p.env.Vendor {
-		p.path = append(p.path, p.env.GOPATH)
-	}
-
-	for _, t := range p.targets {
-		if err := p.parse(t); err != nil {
-			return nil, err
-		}
-	}
-
-	if err := p.parseDirectory("builtin", path.Join(p.env.GOROOT, "src", "builtin")); err != nil {
-		return nil, err
 	}
 
 	return maps.Values(p.cache), nil
@@ -98,6 +132,8 @@ func (p *Parser) parse(quasiPackage string) error {
 		return err
 	}
 
+	slog.Info("resolved directory", slog.String("path", quasiPackage), slog.String("id", id))
+
 	if err := p.parseDirectory(id, quasiPackage); err != nil {
 		return err
 	}
@@ -108,12 +144,18 @@ func (p *Parser) parse(quasiPackage string) error {
 	}
 
 	for _, e := range es {
-		if e.IsDir() {
-			err := p.parse(path.Join(quasiPackage, e.Name()))
-			if err != nil {
-				return err
-			}
+		if !e.IsDir() {
+			continue
+		}
 
+		dir := path.Join(quasiPackage, e.Name())
+
+		if !p.allowedByTargets(dir) {
+			continue
+		}
+
+		if err := p.parse(dir); err != nil {
+			return err
 		}
 	}
 
@@ -128,12 +170,13 @@ func (p *Parser) resolveDirectory(dir string) (string, error) {
 			continue
 		}
 
-		m, ok := p.knownModules[ppath]
-		if ok {
-			return path.Join(m.Path, suffix), nil
-		}
-
 		return suffix, nil
+	}
+
+	for modPath, mod := range p.knownModules {
+		if strings.HasPrefix(dir, modPath) {
+			return path.Join(mod.Path, strings.TrimPrefix(dir, modPath)), nil
+		}
 	}
 
 	return "", ErrDirNotResolved
@@ -215,8 +258,6 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 					continue
 				}
 
-				slog.Info("got directive", slog.String("build", c.Text))
-
 				if !p.allowedByTags(strings.TrimPrefix(c.Text, "//go:build")) {
 					ignored = true
 				}
@@ -267,7 +308,7 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 
 				switch {
 				case errors.Is(err, ErrPackageNotFound):
-					log.Printf("%s not found\n", path)
+					slog.Warn("package not found", slog.String("path", path))
 					continue
 				case err != nil:
 					return err
@@ -301,7 +342,25 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 	return nil
 }
 
+func (p *Parser) allowedByTargets(dir string) bool {
+	for _, path := range p.path {
+		if strings.HasPrefix(dir, path) {
+			return false
+		}
+	}
+
+	for _, t := range p.targets {
+		if strings.HasPrefix(dir, t) {
+			return true
+		}
+	}
+
+	return len(p.targets) == 0
+}
+
 func (p *Parser) allowedByTags(s string) bool {
+	logger := slog.With(slog.String("build directive", s))
+
 	out := newStack[string]()
 	ops := newStack[string]()
 
@@ -371,18 +430,21 @@ func (p *Parser) allowedByTags(s string) bool {
 		switch t {
 		case "!":
 			if eval.Empty() {
+				logger.Error("no operand for !")
 				return false
 			}
 
 			eval.Push(!eval.Pop())
 		case "||", "&&":
 			if eval.Empty() {
+				logger.Error("no operand for || or &&")
 				return false
 			}
 
 			first := eval.Pop()
 
 			if eval.Empty() {
+				logger.Error("no operand for || or &&")
 				return false
 			}
 
@@ -399,6 +461,7 @@ func (p *Parser) allowedByTags(s string) bool {
 	}
 
 	if eval.Empty() {
+		logger.Error("extra tokens in result stack")
 		return false
 	}
 
@@ -435,7 +498,7 @@ func (p *Parser) isRootPackage(pkgDir string) bool {
 	return false
 }
 
-func (p *Parser) parseModule(goModPath string) (*Module, error) {
+func parseModule(goModPath string) (*Module, error) {
 	f, err := os.ReadFile(goModPath)
 	if err != nil {
 		return nil, err
@@ -467,14 +530,6 @@ func upDir(dir string) (string, error) {
 	}
 
 	return path.Join(append([]string{string(os.PathSeparator)}, parts[:len(parts)-1]...)...), nil
-}
-
-func Must[T any](val T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-
-	return val
 }
 
 func isGoFile(name string) bool {

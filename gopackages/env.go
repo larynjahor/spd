@@ -4,19 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
-	"path"
 	"strconv"
 	"strings"
 )
 
 func ParseEnv(vars []string) (zero Env, _ error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return zero, err
-	}
-
 	marshaled, err := exec.Command("go", "env", "-json").Output()
 	if err != nil {
 		return zero, err
@@ -72,17 +65,9 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 				}
 			}
 		case "SPDTARGETS":
-			relativeTargets := strings.Split(v, ",")
-
-			for _, t := range relativeTargets {
-				if !path.IsAbs(t) {
-					t = path.Join(cwd, t)
-				}
-
-				zero.Targets = append(zero.Targets, t)
-			}
+			zero.Targets = strings.Split(v, ",")
 		default:
-			slog.Info("got env", slog.String("key", k), slog.String("value", v))
+			slog.Debug("got env", slog.String("key", k), slog.String("value", v))
 		}
 	}
 
@@ -107,7 +92,12 @@ func (e *Env) MinorVersion() int {
 
 	switch len(tokens) {
 	case 2, 3:
-		return Must(strconv.Atoi(tokens[1]))
+		v, err := strconv.Atoi(tokens[1])
+		if err != nil {
+			panic(err)
+		}
+
+		return v
 	default:
 		panic("wrong version format")
 	}

@@ -4,7 +4,8 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"slices"
+	"strings"
+	"time"
 
 	_ "net/http/pprof"
 
@@ -25,12 +26,12 @@ func main() {
 
 func run() error {
 	var (
-		req packages.DriverRequest
-		dr  DriverResponse
+		started = time.Now()
+		req     packages.DriverRequest
+		dr      DriverResponse
 	)
 
-	slog.Info("started spd")
-	defer slog.Info("exited spd")
+	slog.Info("started spd", slog.String("args", strings.Join(os.Args, " ")))
 
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		return err
@@ -41,19 +42,16 @@ func run() error {
 		return err
 	}
 
-	if !slices.Contains(os.Args, "./...") {
-		dr.NotHandled = true
-
-		return writeResponse(&dr)
+	parser, err := gopackages.NewParser(env)
+	if err != nil {
+		return err
 	}
-
-	parser := gopackages.NewParser(env, env.Targets)
 
 	dr.GoVersion = env.MinorVersion()
 	dr.Arch = env.GOARCH
 	dr.Compiler = "gc"
 
-	dr.Packages, err = parser.Packages()
+	dr.Packages, err = parser.Packages(os.Args[1:])
 	if err != nil {
 		slog.Error("failed to get packages", slog.Any("err", err), slog.String("goroot", env.GOROOT), slog.String("gomod", env.GOMOD))
 		return err
@@ -66,6 +64,8 @@ func run() error {
 	}
 
 	dr.Roots = append(dr.Roots, "builtin")
+
+	slog.Info("exiting spd", slog.Int("numPackages", len(dr.Packages)), slog.Duration("took", time.Since(started)))
 
 	return writeResponse(&dr)
 }

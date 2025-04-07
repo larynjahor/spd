@@ -5,7 +5,12 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"time"
+
+	"github.com/lmittmann/tint"
 )
+
+const logLevel = slog.LevelInfo
 
 func Auto() io.Closer {
 	w, err := getWriter()
@@ -13,10 +18,16 @@ func Auto() io.Closer {
 		log.Fatalln(err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(w, nil))
+	logger := slog.New(tint.NewHandler(w, &tint.Options{
+		AddSource:   true,
+		Level:       logLevel,
+		ReplaceAttr: nil,
+		TimeFormat:  time.Kitchen,
+		NoColor:     false,
+	}))
 
 	slog.SetDefault(logger)
-	slog.SetLogLoggerLevel(slog.LevelDebug)
+	slog.SetLogLoggerLevel(logLevel)
 
 	return w
 }
@@ -32,5 +43,5 @@ func getWriter() (io.WriteCloser, error) {
 		}, nil
 	}
 
-	return os.CreateTemp("/tmp", "spdlog*")
+	return os.OpenFile("/tmp/spdlog", os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)
 }
