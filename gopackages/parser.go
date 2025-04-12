@@ -2,7 +2,6 @@ package gopackages
 
 import (
 	"errors"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -93,7 +92,7 @@ func (p *Parser) Packages(patterns []string) ([]*Package, error) {
 			file := strings.TrimPrefix(pattern, "file=")
 			dir, _ := path.Split(file)
 
-			if err := p.parse(dir); err != nil {
+			if err := p.parse(dir, 1); err != nil {
 				slog.Error("parse package", slog.Any("err", err), slog.String("pattern", pattern), slog.String("res_pattern", dir))
 				continue
 			}
@@ -105,7 +104,7 @@ func (p *Parser) Packages(patterns []string) ([]*Package, error) {
 				packagePath = path.Join(packagePath, patternPath)
 			}
 
-			if err := p.parse(packagePath); err != nil {
+			if err := p.parse(packagePath, -1); err != nil {
 				slog.Error("parse package", slog.Any("err", err), slog.String("pattern", pattern), slog.String("res_pattern", packagePath))
 				continue
 			}
@@ -127,7 +126,11 @@ func (p *Parser) Packages(patterns []string) ([]*Package, error) {
 	return maps.Values(p.cache), nil
 }
 
-func (p *Parser) parse(quasiPackage string) error {
+func (p *Parser) parse(quasiPackage string, depth int) error {
+	if depth == 0 {
+		return nil
+	}
+
 	id, err := p.resolveDirectory(quasiPackage)
 	if err != nil {
 		return err
@@ -153,7 +156,7 @@ func (p *Parser) parse(quasiPackage string) error {
 			continue
 		}
 
-		if err := p.parse(dir); err != nil {
+		if err := p.parse(dir, depth-1); err != nil {
 			return err
 		}
 	}
@@ -226,47 +229,11 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 			continue
 		}
 
-		fset := token.NewFileSet()
 		fileName := path.Join(dir, e.Name())
-
-		f, err := parser.ParseFile(fset, fileName, nil, parser.ImportsOnly|parser.ParseComments)
-		switch {
-		case errors.Is(err, fs.ErrNotExist) || f == nil:
-			continue
-		case err != nil:
-			return err
-		}
-
-		var ignored bool
-		for _, g := range f.Comments {
-			if g == nil {
-				continue
-			}
-
-			for _, c := range g.List {
-				if c == nil {
-					continue
-				}
-
-				if !strings.HasPrefix(c.Text, "//go:build") {
-					continue
-				}
-
-				if !p.allowedByTags(strings.TrimPrefix(c.Text, "//go:build")) {
-					ignored = true
-				}
-			}
-		}
 
 		if strings.HasPrefix(fileName, "_test.go") {
 			continue // TODO
 		}
-
-		if ignored {
-			continue
-		}
-
-		packageName := f.Name.Name
 
 		if _, ok := pkgs[packageName]; !ok {
 			pkgs[packageName] = astPackage{
@@ -280,15 +247,6 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 	for name, pkg := range pkgs {
 		finalID := id
 		packagePath := id
-
-		isTestPackage := strings.HasSuffix(name, "_test")
-
-		if isTestPackage {
-			continue // TODO
-
-			finalID = fmt.Sprintf("%s_test [%s.test]", finalID, finalID)
-			packagePath += "_test"
-		}
 
 		flatImports := make(map[string]string)
 
@@ -338,6 +296,51 @@ func (p *Parser) parseDirectory(id string, dir string) error {
 	}
 
 	return nil
+}
+
+func (p *Parser) parseFile(id string, fileName string) (*Package, error) {
+	fset := token.NewFileSet()
+
+	f, err := parser.ParseFile(fset, fileName, nil, parser.ImportsOnly|parser.ParseComments)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || f == nil:
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+
+	for _, g := range f.Comments {
+		if g == nil {
+			continue
+		}
+
+		for _, c := range g.List {
+			if c == nil {
+				continue
+			}
+
+			if !strings.HasPrefix(c.Text, "//go:build") {
+				continue
+			}
+
+			if !p.allowedByTags(strings.TrimPrefix(c.Text, "//go:build")) {
+				return nil, nil
+			}
+		}
+	}
+
+	packageName := f.Name.Name
+
+	isTestPackage := strings.HasSuffix(packageName, "_test")
+
+	if isTestPackage {
+		return nil, nil
+
+		// finalID = fmt.Sprintf("%s_test [%s.test]", finalID, finalID)
+		// packagePath += "_test"
+	}
+
+	return nil, nil
 }
 
 func (p *Parser) allowedByTargets(dir string) bool {
