@@ -1,4 +1,4 @@
-package gopackages
+package env
 
 import (
 	"encoding/json"
@@ -9,7 +9,13 @@ import (
 	"strings"
 )
 
-func ParseEnv(vars []string) (zero Env, _ error) {
+func New() *Parser {
+	return &Parser{}
+}
+
+type Parser struct{}
+
+func (p *Parser) Parse(vars []string) (zero Env, _ error) {
 	marshaled, err := exec.Command("go", "env", "-json").Output()
 	if err != nil {
 		return zero, err
@@ -53,6 +59,8 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 		k, v := tokens[0], tokens[1]
 
 		switch k {
+		case "GOMOD":
+			zero.GOMOD = v
 		case "CGO_ENABLED":
 			if v == "1" {
 				zero.Tags = append(zero.Tags, "cgo")
@@ -69,6 +77,10 @@ func ParseEnv(vars []string) (zero Env, _ error) {
 		default:
 			slog.Debug("got env", slog.String("key", k), slog.String("value", v))
 		}
+	}
+
+	for _, patch := range []*string{&zero.GOMOD, &zero.GOPATH, &zero.GOROOT} {
+		*patch = strings.TrimPrefix(*patch, "/")
 	}
 
 	return zero, nil

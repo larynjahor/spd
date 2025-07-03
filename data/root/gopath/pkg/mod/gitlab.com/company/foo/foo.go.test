@@ -1,0 +1,11 @@
+package foo
+
+import (
+    "gitlab.com/company/foo/internal/helper
+)
+
+type Config struct {}
+
+func Crash() {
+    helper.Help()
+}

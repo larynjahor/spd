@@ -1,0 +1,30 @@
+package bb
+
+import (
+    "pukadia.su/aa"    
+    "io"
+    "cmp"
+    "github.com/johndoe/pson"
+)
+
+type API struct {
+    aa.API
+
+    w io.Writer
+}
+
+func Max[T cmp.Ordered](x T, y ...T) T {
+    if x > y {
+        return x
+    }
+
+    return y
+}
+
+func Do() {
+    var buf struct {
+        Data []byte
+    }
+
+    _ = pson.Unmarshal(nil, &buf)
+}

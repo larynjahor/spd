@@ -1,8 +1,12 @@
-package gopackages
+package tag_test
 
-import "testing"
+import (
+	"testing"
 
-func TestParser_allowedByTags(t *testing.T) {
+	"github.com/larynjahor/spd/pkg/tag"
+)
+
+func TestEvaler_Eval(t *testing.T) {
 	tests := []struct {
 		name string
 		tags []string
@@ -62,13 +66,9 @@ func TestParser_allowedByTags(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &Parser{
-				env: Env{
-					Tags: tt.tags,
-				},
-			}
+			p := &tag.Evaler{}
 
-			got := p.allowedByTags(tt.s)
+			got := p.Eval(tt.s, tt.tags)
 
 			if got != tt.want {
 				t.Fail()

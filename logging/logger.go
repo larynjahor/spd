@@ -1,4 +1,4 @@
-package xslog
+package logging
 
 import (
 	"io"
@@ -10,12 +10,15 @@ import (
 	"github.com/lmittmann/tint"
 )
 
-const logLevel = slog.LevelInfo
-
 func Auto() io.Closer {
 	w, err := getWriter()
 	if err != nil {
 		log.Fatalln(err)
+	}
+
+	logLevel := slog.LevelDebug
+	if !debug {
+		logLevel = slog.LevelInfo
 	}
 
 	logger := slog.New(tint.NewHandler(w, &tint.Options{
@@ -23,7 +26,7 @@ func Auto() io.Closer {
 		Level:       logLevel,
 		ReplaceAttr: nil,
 		TimeFormat:  time.Kitchen,
-		NoColor:     false,
+		NoColor:     !debug,
 	}))
 
 	slog.SetDefault(logger)
@@ -33,15 +36,11 @@ func Auto() io.Closer {
 }
 
 func getWriter() (io.WriteCloser, error) {
-	if !enable {
-		return struct {
-			io.Writer
-			io.Closer
-		}{
-			io.Discard,
-			io.NopCloser(nil),
-		}, nil
-	}
-
-	return os.OpenFile("/tmp/spdlog", os.O_CREATE|os.O_APPEND|os.O_WRONLY, os.ModePerm)
+	return struct {
+		io.Writer
+		io.Closer
+	}{
+		os.Stderr,
+		io.NopCloser(nil),
+	}, nil
 }

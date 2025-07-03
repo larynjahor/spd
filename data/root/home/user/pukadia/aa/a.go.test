@@ -1,0 +1,9 @@
+package aa
+
+import (
+    "io"
+)
+
+type API struct{
+    r io.Reader 
+}

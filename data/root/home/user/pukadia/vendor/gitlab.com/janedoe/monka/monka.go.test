@@ -1,0 +1,3 @@
+package monka
+
+type Config struct {}

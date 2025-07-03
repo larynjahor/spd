@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -10,25 +11,29 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/goccy/go-json"
-	"github.com/larynjahor/spd/gopackages"
-	"github.com/larynjahor/spd/xslog"
+	"github.com/larynjahor/spd/logging"
+	"github.com/larynjahor/spd/pkg/driver"
+	"github.com/larynjahor/spd/pkg/env"
+	"github.com/larynjahor/spd/pkg/locator"
+	"github.com/larynjahor/spd/pkg/tag"
 	"golang.org/x/tools/go/packages"
 )
 
 func main() {
-	c := xslog.Auto()
+	c := logging.Auto()
 	defer c.Close()
 
-	if err := run(); err != nil {
-		log.Fatalln(err)
+	ctx := context.Background()
+
+	if err := run(ctx); err != nil {
+		slog.ErrorContext(ctx, "run driver", slog.Any("err", err))
 	}
 }
 
-func run() error {
+func run(ctx context.Context) error {
 	var (
 		started = time.Now()
 		req     packages.DriverRequest
-		dr      DriverResponse
 	)
 
 	slog.Info("started spd", slog.String("args", strings.Join(os.Args, " ")))
@@ -37,56 +42,32 @@ func run() error {
 		return err
 	}
 
-	env, err := gopackages.ParseEnv(req.Env)
+	fs := os.DirFS("/")
+	envParser := env.New()
+	env, err := envParser.Parse(req.Env)
+	if err != nil {
+		return fmt.Errorf("parse env: %w", err)
+	}
+
+	pkgLocator, err := locator.NewLocator(fs, &env)
+	if err != nil {
+		return fmt.Errorf("init locator: %w", err)
+	}
+
+	tags := tag.New()
+
+	driver := driver.New(fs, pkgLocator, tags, &env)
+
+	resp, err := driver.Do(context.Background(), &req)
 	if err != nil {
 		return err
 	}
 
-	parser, err := gopackages.NewParser(env)
-	if err != nil {
+	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
 		return err
 	}
 
-	dr.GoVersion = env.MinorVersion()
-	dr.Arch = env.GOARCH
-	dr.Compiler = "gc"
-
-	dr.Packages, err = parser.Packages(os.Args[1:])
-	if err != nil {
-		slog.Error("failed to get packages", slog.Any("err", err), slog.String("goroot", env.GOROOT), slog.String("gomod", env.GOMOD))
-		return err
-	}
-
-	for _, p := range dr.Packages {
-		if !p.DepOnly {
-			dr.Roots = append(dr.Roots, p.ID)
-		}
-	}
-
-	dr.Roots = append(dr.Roots, "builtin")
-
-	slog.Info("exiting spd", slog.Int("numPackages", len(dr.Packages)), slog.Duration("took", time.Since(started)))
-
-	return writeResponse(&dr)
-}
-
-func writeResponse(dr *DriverResponse) error {
-	if err := json.NewEncoder(os.Stdout).Encode(dr); err != nil {
-		return err
-	}
+	slog.Info("exiting spd", slog.Int("numPackages", len(resp.Packages)), slog.Duration("took", time.Since(started)))
 
 	return nil
-}
-
-type DriverResponse struct {
-	NotHandled bool
-
-	Compiler string
-	Arch     string
-
-	Roots []string `json:",omitempty"`
-
-	Packages []*gopackages.Package
-
-	GoVersion int
 }
