@@ -1,0 +1,3 @@
+module github.com/johndoe/pson
+
+go 1.24

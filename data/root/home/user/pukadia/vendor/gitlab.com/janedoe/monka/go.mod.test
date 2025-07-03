@@ -1,0 +1,3 @@
+module gitlab.com/janedoe/monka
+
+go 1.24

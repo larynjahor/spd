@@ -1,0 +1,9 @@
+package builtin
+
+import "cmp"
+
+func max[T cmp.Ordered](x T, y ...T) T
+
+type error interface {
+	Error() string
+}

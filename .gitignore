@@ -1,6 +1,10 @@
+req.json
+dump.json
 yolist
+main
 profiles
 cpu.prof
 .DS_Store
 log
 spd
+gopackages/__debug_bin*

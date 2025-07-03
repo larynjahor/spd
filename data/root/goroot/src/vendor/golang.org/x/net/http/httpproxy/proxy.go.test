@@ -1,0 +1,3 @@
+package httpproxy
+
+type Proxy struct {}

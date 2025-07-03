@@ -1,0 +1,5 @@
+package proto
+
+func Marshal(v any) ([]byte, error) {
+    return nil, nil
+}

@@ -1,0 +1,3 @@
+module gitlab.com/company/foo
+
+go 1.23

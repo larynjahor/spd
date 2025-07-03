@@ -1,76 +1,73 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
 	"os"
-	"slices"
+	"strings"
+	"time"
 
 	_ "net/http/pprof"
 
 	"github.com/goccy/go-json"
-	"github.com/larynjahor/spd/gopackages"
+	"github.com/larynjahor/spd/logging"
+	"github.com/larynjahor/spd/pkg/driver"
+	"github.com/larynjahor/spd/pkg/env"
+	"github.com/larynjahor/spd/pkg/locator"
+	"github.com/larynjahor/spd/pkg/tag"
 	"golang.org/x/tools/go/packages"
 )
 
 func main() {
+	c := logging.Auto()
+	defer c.Close()
+
+	ctx := context.Background()
+
+	if err := run(ctx); err != nil {
+		slog.ErrorContext(ctx, "run driver", slog.Any("err", err))
+	}
+}
+
+func run(ctx context.Context) error {
 	var (
-		err error
-		req packages.DriverRequest
-		dr  DriverResponse
+		started = time.Now()
+		req     packages.DriverRequest
 	)
 
+	slog.Info("started spd", slog.String("args", strings.Join(os.Args, " ")))
+
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
-		panic(err)
+		return err
 	}
 
-	env, err := gopackages.ParseEnv(req.Env)
+	fs := os.DirFS("/")
+	envParser := env.New()
+	env, err := envParser.Parse(req.Env)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("parse env: %w", err)
 	}
 
-	if !slices.Contains(os.Args, "./...") {
-		dr.NotHandled = true
-		writeResponse(&dr)
-	}
-
-	w := gopackages.NewWalker(env, env.Targets)
-
-	dr.GoVersion = env.MinorVersion()
-	dr.Arch = env.GOARCH
-	dr.Compiler = "gc"
-
-	dr.Packages, err = w.Packages()
+	pkgLocator, err := locator.NewLocator(fs, &env)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("init locator: %w", err)
 	}
 
-	for _, p := range dr.Packages {
-		if !p.DepOnly {
-			dr.Roots = append(dr.Roots, p.ID)
-		}
+	tags := tag.New()
+
+	driver := driver.New(fs, pkgLocator, tags, &env)
+
+	resp, err := driver.Do(context.Background(), &req)
+	if err != nil {
+		return err
 	}
 
-	dr.Roots = append(dr.Roots, "builtin")
-
-	writeResponse(&dr)
-}
-
-func writeResponse(dr *DriverResponse) {
-	if err := json.NewEncoder(os.Stdout).Encode(dr); err != nil {
-		panic(err)
+	if err := json.NewEncoder(os.Stdout).Encode(resp); err != nil {
+		return err
 	}
 
-	os.Exit(0)
-}
+	slog.Info("exiting spd", slog.Int("numPackages", len(resp.Packages)), slog.Duration("took", time.Since(started)))
 
-type DriverResponse struct {
-	NotHandled bool
-
-	Compiler string
-	Arch     string
-
-	Roots []string `json:",omitempty"`
-
-	Packages []*gopackages.Package
-
-	GoVersion int
+	return nil
 }
