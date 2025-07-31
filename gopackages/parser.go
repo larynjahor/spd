@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -52,10 +53,12 @@ func (p *Parser) Env() Env {
 }
 
 func (p *Parser) Packages() ([]*Package, error) {
+	excludedTargets := []string{}
 	for _, t := range p.targets {
 		moduleDir, err := p.findModuleDir(t)
 		if err != nil {
-			return nil, err
+			excludedTargets = append(excludedTargets, t)
+			continue
 		}
 
 		p.path = append(p.path, moduleDir)
@@ -78,6 +81,9 @@ func (p *Parser) Packages() ([]*Package, error) {
 	}
 
 	for _, t := range p.targets {
+		if slices.Contains(excludedTargets, t) {
+			continue
+		}
 		if err := p.parse(t); err != nil {
 			panic(err)
 		}
@@ -345,13 +351,15 @@ func (p *Parser) parseModule(goModPath string) (*Module, error) {
 }
 
 func upDir(dir string) (string, error) {
-	parts := strings.Split(dir, string(os.PathSeparator))
+	cleaned := filepath.Clean(dir)
+	parent := filepath.Dir(cleaned)
 
-	if len(parts) <= 1 {
-		return "", errors.New("not found")
+	// Check if we're at root after normalization
+	if parent == cleaned {
+		return "", errors.New("root reached")
 	}
 
-	return path.Join(append([]string{string(os.PathSeparator)}, parts[:len(parts)-1]...)...), nil
+	return parent, nil
 }
 
 func Must[T any](val T, err error) T {
